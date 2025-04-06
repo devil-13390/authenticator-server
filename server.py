@@ -1,25 +1,37 @@
-import asyncio
-import websockets
+const WebSocket = require("ws");
+const wss = new WebSocket.Server({ port: process.env.PORT || 10000 });
 
-connected_clients = set()
+const devices = new Map();
 
-async def handler(websocket, path):
-    print("Client connected")
-    connected_clients.add(websocket)
-    try:
-        async for message in websocket:
-            print(f"Received: {message}")
-            for client in connected_clients:
-                if client != websocket:
-                    await client.send(message)
-    except:
-        pass
-    finally:
-        connected_clients.remove(websocket)
-        print("Client disconnected")
+wss.on("connection", (ws) => {
+  ws.on("message", (message) => {
+    try {
+      const msg = JSON.parse(message);
 
-async def main():
-    async with websockets.serve(handler, "", 8080):
-        await asyncio.Future()  # run forever
+      if (msg.type === "register") {
+        ws.deviceId = msg.deviceId;
+        devices.set(msg.deviceId, ws);
+        console.log(`Device ${msg.deviceId} registered.`);
+      } 
+      else if (msg.type === "discover") {
+        const list = Array.from(devices.keys()).filter((id) => id !== msg.requesterId);
+        ws.send(JSON.stringify({ type: "device_list", devices: list }));
+      } 
+      else if (msg.type === "forward" && msg.to) {
+        const target = devices.get(msg.to);
+        if (target && target.readyState === WebSocket.OPEN) {
+          target.send(JSON.stringify({ ...msg, from: ws.deviceId }));
+        }
+      }
+    } catch (e) {
+      console.error("Invalid message", e);
+    }
+  });
 
-asyncio.run(main())
+  ws.on("close", () => {
+    if (ws.deviceId && devices.has(ws.deviceId)) {
+      devices.delete(ws.deviceId);
+      console.log(`Device ${ws.deviceId} disconnected.`);
+    }
+  });
+});
